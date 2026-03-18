@@ -1,0 +1,470 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © MrTangoEco
+
+//@version=6
+indicator("Price Action Bias (BETA) V0(R)", shorttitle="PAB(Ω)v0", overlay=true)
+
+group_pab = "Price Action Bias (Ω)"
+
+
+//==================================================
+// DYNAMIC ALPHA MOVING AVERAGE      
+//==================================================
+plotDama = input.bool(true, title="Show Dynamic Alpha Moving Average?", group="")
+
+userMinBars = input.int(2, title="Min bars filter amount", step=1, minval=1, maxval=999)
+
+volatilityLength = input.int(14, title="ATR Length")
+minAlpha = input.float(0.01, title="Min Alpha", step=0.01)
+maxAlpha = input.float(0.5, title="Max Alpha", step=0.01)
+
+// === Volatility Measure ===
+atrdama = ta.atr(volatilityLength)
+normVol = atrdama / close
+
+// Normalize volatility into alpha range
+alphadama = math.min(math.max(normVol, minAlpha), maxAlpha)
+
+// === DAMA Calculation ===
+var float dama = na
+dama := na(dama[1]) ? close : alphadama * close + (1 - alphadama) * dama[1]
+
+// === DAMA GRADIENT LOGIC ===
+slope = dama - dama[1]
+length = 16
+maxSlope = ta.highest(math.abs(slope), length)
+
+normSlope = slope / maxSlope
+
+color_dama = color.from_gradient(
+     normSlope,
+     -1, 1,
+     color.red,
+     color.green
+)
+
+plot(dama, color=color_dama, linewidth=2)
+//==================================================
+// PRICE ACTION BIAS (Ω)       
+//==================================================
+plotLine      = input.bool(true, title="Show Swing Moving Average?", group=group_pab)
+lengthPAB     = input.int(9, "Regression Length", group=group_pab)
+smoothSlope   = input.int(3, "Slope Smoothing", group=group_pab)
+lookback      = input.int(180, "Structure Lookback", group=group_pab)
+curveLookback = input.int(10, title="Curvature Lookback", minval=1, group=group_pab)
+dynamicORmanual = input.string("Manual", "Angle Measurement Mode", options=["Dynamic", "Manual"], group=group_pab)
+multiplier = input.float(1.2, title="Dynamic Multiplier", step=0.01)
+manualThreshold = input.float(40, "Manual Threshold", step=1, group=group_pab)
+//flatAngleThresh = input.float(2.0, "Flat Angle Threshold (°)", step=0.1, group=group_pab)
+tolerancePerc = input.float(0.2, "Tolerance %") / 100
+// === SMOOTHED PRICE LINE ===
+reg       = ta.linreg(close, lengthPAB, -1)
+finalLine = ta.sma(reg, smoothSlope)
+
+plot(plotLine ? finalLine : na, color=color.white, linewidth=2)
+
+// =====================================================
+// SLOPE ENGINE
+// =====================================================
+rawSlope = finalLine - finalLine[1]
+normBase = ta.ema(math.abs(rawSlope), 50)
+normBase := normBase == 0.0 ? 1e-10 : normBase
+
+slopeNorm = rawSlope / normBase
+angle     = math.atan(slopeNorm) * 180 / math.pi
+angleAbs  = math.abs(angle)
+
+angleMean  = ta.ema(angleAbs, 10)
+threshold  = angleMean * multiplier
+angleAccel = angleAbs - angleAbs[1]
+
+// =====================================================
+// IMPULSE STATE (PERSISTENT)
+// =====================================================
+var bool downImpulse = false
+var bool upImpulse   = false
+var bool downImpulseCamel = false
+var bool upImpulseCamel   = false
+
+// =====================================================
+// EXTREME TRACKING
+// =====================================================
+var float swingHighCandidate = na
+var int   swingHighBar = na
+var float swingLowCandidate  = na
+var int   swingLowBar = na
+
+// =====================================================
+// CONFIRMED SWINGS
+// =====================================================
+var float confirmedHigh = na
+var int   confirmedHighBar = na
+var float confirmedLow  = na
+var int   confirmedLowBar = na
+
+var float lastHigh = na
+var float prevHigh = na
+var int   lastHighBar = na
+var int   prevHighBar = na
+
+var float lastLow = na
+var float prevLow = na
+var int   lastLowBar = na
+var int   prevLowBar = na
+
+var bool confirmedHighIsCamel = false
+var bool confirmedLowIsCamel  = false
+
+float currentThreshold = dynamicORmanual == "Dynamic" ? threshold : manualThreshold
+
+// =====================================================
+// START IMPULSES (FIXED: USE HISTORICAL THRESHOLD)
+// =====================================================
+for i = curveLookback to 0
+    float compThresh = dynamicORmanual == "Dynamic" ? threshold[i] : manualThreshold
+    if angle[i] > compThresh
+        downImpulse := true
+    if angle[i] < -compThresh
+        upImpulse := true
+
+// Camel impulses – also fixed to use historical threshold and consistent lookback
+for i = curveLookback to 0
+    float compThresh = dynamicORmanual == "Dynamic" ? threshold[i] : manualThreshold
+    if angle[i] > compThresh
+        downImpulseCamel := true
+    if angle[i] < -compThresh
+        upImpulseCamel := true
+
+// =====================================================
+// CAMEL DETECTION (SEQUENCED CORRECTLY)
+// =====================================================
+pullbackDown = downImpulseCamel and angle > 0
+reExpandDown = downImpulseCamel and angle < 0 and angleAccel > 0 and angleAbs > currentThreshold
+camelDown    = pullbackDown[1] and reExpandDown
+
+pullbackUp   = upImpulseCamel and angle < 0
+reExpandUp   = upImpulseCamel and angle > 0 and angleAccel > 0 and angleAbs > currentThreshold
+camelUp      = pullbackUp[1] and reExpandUp
+
+// =====================================================
+// CONFIRM CAMEL SWINGS
+// =====================================================
+var float ph = na
+var float pl = na
+int phBar = na
+int plBar = na
+
+if camelDown and not na(swingHighCandidate)
+    confirmedHigh := swingHighCandidate
+    confirmedHighBar := swingHighBar
+    confirmedHighIsCamel := true
+    swingHighCandidate := finalLine
+    swingHighBar := bar_index
+    ph := confirmedHigh
+    
+
+if camelUp and not na(swingLowCandidate)
+    confirmedLow := swingLowCandidate
+    confirmedLowBar := swingLowBar
+    confirmedLowIsCamel := true
+    swingLowCandidate := finalLine
+    swingLowBar := bar_index
+    pl := confirmedLow
+
+// =====================================================
+// CONFIRM KEY SWINGS
+// =====================================================
+if downImpulse and angle <= -currentThreshold and not na(swingHighCandidate)
+    confirmedHigh := swingHighCandidate
+    confirmedHighBar := swingHighBar
+    confirmedHighIsCamel := false
+    swingHighCandidate := na
+    swingHighBar := na
+    downImpulse := false
+    downImpulseCamel := false
+    ph := confirmedHigh
+
+if upImpulse and angle >= currentThreshold and not na(swingLowCandidate)
+    confirmedLow := swingLowCandidate
+    confirmedLowBar := swingLowBar
+    confirmedLowIsCamel := false
+    swingLowCandidate := na
+    swingLowBar := na
+    upImpulse := false
+    upImpulseCamel := false
+    pl := confirmedLow
+
+// =====================================================
+// UPDATE EXTREME CANDIDATES
+// =====================================================
+if angle > 0 and not camelDown
+    if na(swingHighCandidate) or finalLine > swingHighCandidate
+        swingHighCandidate := finalLine
+        swingHighBar := bar_index
+
+if angle < 0 and not camelUp
+    if na(swingLowCandidate) or finalLine < swingLowCandidate
+        swingLowCandidate := finalLine
+        swingLowBar := bar_index
+
+// =====================================================
+// LABEL PRINTING | SWINGS LEVELS
+// =====================================================
+var line swingHighLine  = na
+var line swingLowLine   = na
+var line purpleHighLine = na
+var line purpleLowLine  = na
+
+// Minimum bars between swings
+minSwingBars = input.int(5, "Minimum bars between swings", minval=1)
+
+// Track last confirmed swing bars per direction
+var int lastUpSwingBar = na
+var int lastDownSwingBar = na
+
+// =====================================================
+// LABEL PRINTING | SWINGS LEVELS (with distance filter)
+// =====================================================
+if not na(confirmedHigh) and bar_index - confirmedHighBar <= lookback
+    // Skip if too close to previous up swing
+    if na(lastUpSwingBar) or (confirmedHighBar - lastUpSwingBar >= minSwingBars)
+        lastUpSwingBar := confirmedHighBar
+
+        label.new(
+            confirmedHighBar,
+            confirmedHigh,
+            confirmedHighIsCamel ? "SH-C" : "SH",
+            style=label.style_label_down,
+            color=confirmedHighIsCamel ? color.orange : color.red,
+            textcolor=color.white,
+            size=size.small)
+
+        // ---- STORE HIGH ----
+        prevHigh := lastHigh
+        prevHighBar := lastHighBar
+        lastHigh := confirmedHigh
+        lastHighBar := confirmedHighBar
+
+        // Delete previous dashed line
+        if not na(swingHighLine)
+            line.delete(swingHighLine)
+
+        // Draw dashed swing line
+        swingHighLine := line.new(
+            confirmedHighBar,
+            confirmedHigh,
+            bar_index,
+            confirmedHigh,
+            extend=extend.right,
+            color=color.red,
+            style=line.style_dashed,
+            width=1)
+
+        // Connect last two swings
+        if not na(prevHigh)
+            if not na(purpleHighLine)
+                line.delete(purpleHighLine)
+
+            color highLineColor = lastHigh > prevHigh ? color.green : color.red
+
+            purpleHighLine := line.new(
+                prevHighBar, prevHigh,
+                lastHighBar, lastHigh,
+                color=highLineColor, width=2)
+            
+            doubleTop = false
+
+            if not na(prevHigh) and not na(lastHigh)
+                diff = math.abs(lastHigh - prevHigh)
+                tolerance = lastHigh * tolerancePerc
+
+                doubleTop := diff <= tolerance
+
+    confirmedHigh := na
+
+
+if not na(confirmedLow) and bar_index - confirmedLowBar <= lookback
+    // Skip if too close to previous down swing
+    if na(lastDownSwingBar) or (confirmedLowBar - lastDownSwingBar >= minSwingBars)
+        lastDownSwingBar := confirmedLowBar
+
+        label.new(
+            confirmedLowBar,
+            confirmedLow,
+            confirmedLowIsCamel ? "SL-C" : "SL",
+            style=label.style_label_up,
+            color=confirmedLowIsCamel ? color.aqua : color.lime,
+            textcolor=color.white,
+            size=size.small)
+
+        // ---- STORE LOW ----
+        prevLow := lastLow
+        prevLowBar := lastLowBar
+        lastLow := confirmedLow
+        lastLowBar := confirmedLowBar
+
+        // Delete previous dashed line
+        if not na(swingLowLine)
+            line.delete(swingLowLine)
+ 
+        // Draw dashed swing line
+        swingLowLine := line.new(
+            confirmedLowBar,
+            confirmedLow,
+            bar_index,
+            confirmedLow,
+            extend=extend.right,
+            color=color.blue,
+            style=line.style_dashed,
+            width=1)
+
+        // Connect last two swings
+        if not na(prevLow)
+            if not na(purpleLowLine)
+                line.delete(purpleLowLine)
+
+            color lowLineColor = lastLow > prevLow ? color.green : color.red
+
+            purpleLowLine := line.new(
+                prevLowBar, prevLow,
+                lastLowBar, lastLow,
+                color=lowLineColor, width=2)
+
+            doubleBottom = false
+
+            if not na(prevLow) and not na(lastLow)
+                diff = math.abs(lastLow - prevLow)
+                tolerance = lastLow * tolerancePerc
+
+                doubleBottom := diff <= tolerance
+
+    confirmedLow := na
+
+
+rib = ta.rising(finalLine, 1)
+fab = ta.falling(finalLine, 1)
+
+// COLOR LOGIC
+green = close > open
+red = close < open
+
+// === PERCENTAGE FILTER ===
+lookbackc = input.int(4, "Lookback Bars")
+thresholdPct = input.float(0.1, "Threshold %", step=0.01)  // default 0.1%
+
+// Reference price from N bars ago
+refPrice = close[lookbackc]
+
+// % movement from lookback to now
+movePct = (close - refPrice) / refPrice * 100
+
+// Condition: absolute movement exceeds threshold
+validMove = math.abs(movePct) >= thresholdPct
+
+signalpercfilter = math.abs((close - close[lookbackc]) / close[lookbackc]) >= thresholdPct / 100
+
+aboveDirEma = close > dama //150 PREV PERIOD FOR LONG EMA
+belowDirEma = close < dama
+
+//==================================================
+// DYNAMIC LINEAR REGRESSION TREND      
+//==================================================
+length2        = input.int(14, "Regression Length")
+normalize     = input.bool(true, "Normalize by ATR")
+atrLength2   = input.int(10, "ATR Length")
+smoothSlope2   = input.int(3, "Slope Smoothing")
+showReversal  = input.bool(false, "Show Reversal Score")
+
+// === VOLATILITY + ADAPTIVE LENGTH ===
+atr = ta.atr(atrLength2)
+volatility = atr / close
+
+adaptiveLengthRaw = length2 * (1 + nz(volatility, 0))
+adaptiveLength = math.round(adaptiveLengthRaw)
+adaptiveLength := math.max(5, math.min(adaptiveLength, 100))
+adaptiveLength := math.max(2, adaptiveLength)
+
+// === LOG REGRESSION ===
+logClose = math.log(math.max(close, 1e-10))
+
+reg_now  = ta.linreg(logClose, adaptiveLength, 0)
+reg_prev = ta.linreg(logClose, adaptiveLength, 1)
+
+slopeReg = reg_now - reg_prev
+
+// === NORMALIZATION ===
+normSlopeReg = normalize ? slope / (atr + close * 0.001) : slopeReg
+
+// === SMOOTHING (Adaptive EMA-like) ===
+var float finalSlope = na
+alpha = 2.0 / (smoothSlope + 1)
+
+finalSlope := na(finalSlope[1])
+     ? normSlopeReg
+     : finalSlope[1] + alpha * (normSlopeReg - finalSlope[1])
+
+// === R-SQUARED TREND QUALITY FILTER ===
+timeSeries = ta.cum(1)
+r = ta.correlation(close, timeSeries, adaptiveLength)
+r2 = r * r
+
+finalSlope := finalSlope * r2
+
+dlrtup   = ta.rising(finalSlope, 1)
+dlrtdn = ta.falling(finalSlope, 1)
+
+
+
+// === MINIMUM BARS FILTER ===
+var greenLightValid = false
+var redLightValid = false
+
+greenLightValid := true
+redLightValid := true
+
+for i = userMinBars to 0
+    if close[i] <= dama[i]
+        greenLightValid := false
+
+    if close[i] >= dama[i]
+        redLightValid := false
+
+// Rib/Fab is swings linreg MA
+// dlrtup/dn is dynamic linreg trend
+// green/red candles match dir
+// green/red light are enough bars below dama
+up = dlrtup
+     and rib
+     and green 
+     and signalpercfilter 
+     and close > finalLine
+     and greenLightValid
+dn = dlrtdn 
+     and fab 
+     and red 
+     and signalpercfilter 
+     and close < finalLine
+     and redLightValid
+
+// and greenLightValid and aboveDirEma//
+// and redLightValid and belowDirEma
+
+
+
+var color lastcolor = na
+
+if up
+    lastcolor := color.new(color.green, 80)
+else if dn
+    lastcolor := color.new(color.red, 80)
+else
+    lastcolor := lastcolor
+
+
+
+bgcolor(up ? color.new(color.green, 80) : dn ? color.new(color.red, 80) : lastcolor)
+
+
+
+
+
