@@ -5,11 +5,10 @@
 // Use at your own risk. No warranty expressed or implied.
 // Past performance does not guarantee future results.
 //
-// AI Disclosure: This tool may include code generated or
-// refined with AI assistance. The author assumes full
-// responsibility for all final output.
+// This project may contain code developed or optimized with the assistance of artificial intelligence tools. 
+// All AI-generated contributions have been reviewed, tested, and approved by the project author.
 //
-// Permission: Free to use, modify, and distribute non-commercially.
+// Permission: Free to use, modify, and distribute non-commercially provided this notice remains intact.
 //==================================================
 //@version=6
 indicator("Bar Replay Assistant", overlay=true)
