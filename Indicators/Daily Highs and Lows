@@ -1,0 +1,259 @@
+//@version=6
+indicator("Daily Highs and Lows", overlay=true)
+
+//==================================================
+// USER INPUTS
+//==================================================
+showBackground = input.bool(true, "Show Day Background Colors", group="Display")
+showClock = input.bool(true, "Show Clock & Date Table", group="Display")
+showMidnightLine = input.bool(true, "Show Next Midnight Line", group="Display")
+showCurrentDayLines = input.bool(true, "Show Current Day H/L Lines", group="Display")
+tablePosition = input.string("Top Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Display")
+tableTheme = input.string("Dark", "Table Theme", options=["Dark", "Light"], group="Display")
+timezoneOffset = input.float(2.0, "Timezone Offset (hours)", step=0.5, tooltip="Positive = ahead of UTC. Example: UTC+2 → +2", group="Display")
+
+// Day colors (shades of gray)
+colorMonday    = input.color(color.new(#C0C0C0, 0), "Monday Color", group="Colors")
+colorTuesday   = input.color(color.new(#A8A8A8, 0), "Tuesday Color", group="Colors")
+colorWednesday = input.color(color.new(#909090, 0), "Wednesday Color", group="Colors")
+colorThursday  = input.color(color.new(#787878, 0), "Thursday Color", group="Colors")
+colorFriday    = input.color(color.new(#606060, 0), "Friday Color", group="Colors")
+colorSaturday  = input.color(color.new(#484848, 0), "Saturday Color", group="Colors")
+colorSunday    = input.color(color.new(#303030, 0), "Sunday Color", group="Colors")
+
+// Opacity setting
+bgOpacity = input.int(30, "Background Opacity", minval=0, maxval=100, step=5, group="Display", tooltip="0 = transparent, 100 = solid color")
+
+// Debug option
+showDayLabel = input.bool(false, "Show Day Label on Chart (Debug)", group="Display")
+
+//==================================================
+// TABLE THEME COLORS (Black & White contrast)
+//==================================================
+// Dark Theme (for dark TradingView theme)
+darkBgHeader = color.new(#1a1a1a, 0)      // Near black
+darkBgCell = color.new(#2d2d2d, 0)         // Dark gray
+darkBorder = color.new(#404040, 0)         // Medium gray
+darkTextLabel = color.new(#e0e0e0, 0)      // Light gray
+darkTextValue = color.new(#ffffff, 0)      // Pure white
+
+// Light Theme (for light TradingView theme)
+lightBgHeader = color.new(#e0e0e0, 0)      // Light gray
+lightBgCell = color.new(#f0f0f0, 0)        // Off-white
+lightBorder = color.new(#b0b0b0, 0)        // Medium light gray
+lightTextLabel = color.new(#333333, 0)     // Dark gray
+lightTextValue = color.new(#000000, 0)     // Pure black
+
+// Declare theme variables
+var color bgHeader = na
+var color bgCell = na
+var color borderColor = na
+var color textLabel = na
+var color textValue = na
+
+// Apply theme
+if tableTheme == "Dark"
+    bgHeader := darkBgHeader
+    bgCell := darkBgCell
+    borderColor := darkBorder
+    textLabel := darkTextLabel
+    textValue := darkTextValue
+else
+    bgHeader := lightBgHeader
+    bgCell := lightBgCell
+    borderColor := lightBorder
+    textLabel := lightTextLabel
+    textValue := lightTextValue
+
+//==================================================
+// TIMEZONE OFFSET CALCULATION
+//==================================================
+offsetMillis = int(timezoneOffset * 60 * 60 * 1000)
+
+// Use chart's current time (last bar time) for clock
+chartTime = time_close
+
+// Apply offset to chart time for display
+adjustedTime = chartTime + offsetMillis
+
+// For background, use chart bar time with offset to determine correct trading day
+barAdjustedTime = time + offsetMillis
+barDayOfWeek = dayofweek(barAdjustedTime)
+
+//==================================================
+// TRACK CURRENT DAY'S HIGH AND LOW (with timezone offset)
+//==================================================
+oneDay = 24 * 60 * 60 * 1000
+currentDayNum = math.floor(barAdjustedTime / oneDay)
+var int lastDayNum = na
+var float currentDayHigh = na
+var float currentDayLow = na
+
+// Detect new day in user's timezone
+if na(lastDayNum) or currentDayNum != lastDayNum
+    // New day started, reset high/low
+    currentDayHigh := high
+    currentDayLow := low
+    lastDayNum := currentDayNum
+else
+    // Update current day's high/low
+    currentDayHigh := math.max(currentDayHigh, high)
+    currentDayLow := math.min(currentDayLow, low)
+
+//==================================================
+// CALCULATE NEXT MIDNIGHT (in user's timezone)
+//==================================================
+currentTimestampAdjusted = chartTime + offsetMillis
+
+// Calculate milliseconds to next midnight
+midnightToday = math.floor(currentTimestampAdjusted / oneDay) * oneDay
+midnightTomorrow = midnightToday + oneDay
+nextMidnightExchange = midnightTomorrow - offsetMillis
+
+//==================================================
+// DRAW VERTICAL LINE AT NEXT MIDNIGHT (Orange)
+//==================================================
+var line midnightLine = na
+if showMidnightLine and barstate.islast and nextMidnightExchange > chartTime and not na(currentDayHigh) and not na(currentDayLow)
+    if not na(midnightLine)
+        line.delete(midnightLine)
+    
+    midnightLine := line.new(x1=nextMidnightExchange, y1=currentDayHigh, x2=nextMidnightExchange, y2=currentDayLow, 
+                             xloc=xloc.bar_time, color=color.new(color.orange, 0), width=1, style=line.style_solid)
+
+//==================================================
+// DRAW CURRENT DAY HORIZONTAL LINES (extend to midnight line)
+//==================================================
+var line highLine = na
+var line lowLine = na
+
+if showCurrentDayLines and barstate.islast and not na(currentDayHigh) and not na(currentDayLow) and not na(nextMidnightExchange)
+    // Delete previous lines
+    if not na(highLine)
+        line.delete(highLine)
+    if not na(lowLine)
+        line.delete(lowLine)
+    
+    // Draw high line from current bar to midnight line
+    highLine := line.new(x1=bar_index, y1=currentDayHigh, x2=nextMidnightExchange, y2=currentDayHigh,
+                         xloc=xloc.bar_time, color=color.new(color.orange, 0), width=1, style=line.style_solid)
+    
+    // Draw low line from current bar to midnight line
+    lowLine := line.new(x1=bar_index, y1=currentDayLow, x2=nextMidnightExchange, y2=currentDayLow,
+                        xloc=xloc.bar_time, color=color.new(color.orange, 0), width=1, style=line.style_solid)
+
+//==================================================
+// ASSIGN COLOR BASED ON BAR'S DAY (for background)
+//==================================================
+color barDayColor = switch barDayOfWeek
+    dayofweek.monday    => colorMonday
+    dayofweek.tuesday   => colorTuesday
+    dayofweek.wednesday => colorWednesday
+    dayofweek.thursday  => colorThursday
+    dayofweek.friday    => colorFriday
+    dayofweek.saturday  => colorSaturday
+    dayofweek.sunday    => colorSunday
+
+// Apply opacity
+bgColor = color.new(barDayColor, 100 - bgOpacity)
+
+//==================================================
+// PAINT BACKGROUND
+//==================================================
+bgcolor(showBackground ? bgColor : na)
+
+//==================================================
+// DEBUG: Show day label on each bar
+//==================================================
+debugDayName = switch barDayOfWeek
+    dayofweek.monday    => "Mon"
+    dayofweek.tuesday   => "Tue"
+    dayofweek.wednesday => "Wed"
+    dayofweek.thursday  => "Thu"
+    dayofweek.friday    => "Fri"
+    dayofweek.saturday  => "Sat"
+    dayofweek.sunday    => "Sun"
+
+if showDayLabel
+    label.new(bar_index, high, debugDayName, style=label.style_label_down, color=barDayColor, textcolor=color.white, size=size.tiny)
+
+//==================================================
+// GET CURRENT TIME & DATE (without seconds) with offset
+//==================================================
+currentHour = hour(chartTime, "GMT") + timezoneOffset
+currentMinute = minute(chartTime, "GMT")
+
+// Handle hour overflow/underflow
+if currentHour >= 24
+    currentHour := currentHour - 24
+if currentHour < 0
+    currentHour := currentHour + 24
+
+// Format hour in 24-hour format with leading zero
+hourStr = str.tostring(currentHour)
+if currentHour < 10
+    hourStr := "0" + hourStr
+
+// Format minute with leading zero
+minuteStr = str.tostring(currentMinute)
+if currentMinute < 10
+    minuteStr := "0" + minuteStr
+
+timeString = hourStr + ":" + minuteStr
+
+// Get date components from adjusted time
+currentYear = year(chartTime + offsetMillis)
+currentMonth = month(chartTime + offsetMillis)
+currentDay = dayofmonth(chartTime + offsetMillis)
+
+// Format month with leading zero
+monthStr = str.tostring(currentMonth)
+if currentMonth < 10
+    monthStr := "0" + monthStr
+
+// Format day with leading zero
+dayStr = str.tostring(currentDay)
+if currentDay < 10
+    dayStr := "0" + dayStr
+
+dateString = dayStr + "/" + monthStr + "/" + str.tostring(currentYear)
+
+//==================================================
+// GET CURRENT DAY NAME FOR TABLE (using adjusted time)
+//==================================================
+currentDayOfWeek = dayofweek(chartTime + offsetMillis)
+currentDayName = switch currentDayOfWeek
+    dayofweek.monday    => "Mon"
+    dayofweek.tuesday   => "Tue"
+    dayofweek.wednesday => "Wed"
+    dayofweek.thursday  => "Thu"
+    dayofweek.friday    => "Fri"
+    dayofweek.saturday  => "Sat"
+    dayofweek.sunday    => "Sun"
+
+//==================================================
+// CREATE AND UPDATE TABLE
+//==================================================
+// Determine table position
+tablePos = switch tablePosition
+    "Top Right" => position.top_right
+    "Top Left" => position.top_left
+    "Bottom Right" => position.bottom_right
+    => position.bottom_left
+
+// Create table only once
+var tbl = table.new(tablePos, 2, 3, border_width=1, border_color=borderColor, frame_color=borderColor, frame_width=1)
+
+// Update table cells on every bar (so time updates)
+if showClock
+    // Row 0: Time
+    table.cell(tbl, 0, 0, "TIME", bgcolor=bgHeader, text_color=textLabel, text_size=size.small, text_halign=text.align_center)
+    table.cell(tbl, 1, 0, timeString, bgcolor=bgCell, text_color=textValue, text_size=size.normal, text_halign=text.align_center)
+
+    // Row 1: Date
+    table.cell(tbl, 0, 1, "DATE", bgcolor=bgHeader, text_color=textLabel, text_size=size.small, text_halign=text.align_center)
+    table.cell(tbl, 1, 1, dateString, bgcolor=bgCell, text_color=textValue, text_size=size.normal, text_halign=text.align_center)
+
+    // Row 2: Day
+    table.cell(tbl, 0, 2, "DAY", bgcolor=bgHeader, text_color=textLabel, text_size=size.small, text_halign=text.align_center)
+    table.cell(tbl, 1, 2, currentDayName, bgcolor=bgCell, text_color=textValue, text_size=size.normal, text_halign=text.align_center)
