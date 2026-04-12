@@ -1,0 +1,184 @@
+//@version=6
+indicator("Bar Replay Assistant", overlay=true)
+
+//==================================================
+// USER INPUTS
+//==================================================
+showBackground = input.bool(true, "Show Day Background Colors", group="Display")
+showClock = input.bool(true, "Show Clock & Date Table", group="Display")
+tablePosition = input.string("Top Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Display")
+tableTheme = input.string("Dark", "Table Theme", options=["Dark", "Light"], group="Display")
+timezoneOffset = input.float(2.0, "Timezone Offset (hours)", step=0.5, tooltip="Positive = ahead of UTC. Example: UTC+2 → +2", group="Display")
+
+// Day colors (shades of gray)
+colorMonday    = input.color(color.new(#C0C0C0, 0), "Monday Color", group="Colors")
+colorTuesday   = input.color(color.new(#A8A8A8, 0), "Tuesday Color", group="Colors")
+colorWednesday = input.color(color.new(#909090, 0), "Wednesday Color", group="Colors")
+colorThursday  = input.color(color.new(#787878, 0), "Thursday Color", group="Colors")
+colorFriday    = input.color(color.new(#606060, 0), "Friday Color", group="Colors")
+colorSaturday  = input.color(color.new(#484848, 0), "Saturday Color", group="Colors")
+colorSunday    = input.color(color.new(#303030, 0), "Sunday Color", group="Colors")
+
+// Opacity setting
+bgOpacity = input.int(30, "Background Opacity", minval=0, maxval=100, step=5, group="Display", tooltip="0 = transparent, 100 = solid color")
+
+// Debug option
+showDayLabel = input.bool(false, "Show Day Label on Chart (Debug)", group="Display")
+
+//==================================================
+// TABLE THEME COLORS (Black & White contrast)
+//==================================================
+// Dark Theme (for dark TradingView theme)
+darkBgHeader = color.new(#1a1a1a, 0)      // Near black
+darkBgCell = color.new(#2d2d2d, 0)         // Dark gray
+darkBorder = color.new(#404040, 0)         // Medium gray
+darkTextLabel = color.new(#e0e0e0, 0)      // Light gray
+darkTextValue = color.new(#ffffff, 0)      // Pure white
+
+// Light Theme (for light TradingView theme)
+lightBgHeader = color.new(#e0e0e0, 0)      // Light gray
+lightBgCell = color.new(#f0f0f0, 0)        // Off-white
+lightBorder = color.new(#b0b0b0, 0)        // Medium light gray
+lightTextLabel = color.new(#333333, 0)     // Dark gray
+lightTextValue = color.new(#000000, 0)     // Pure black
+
+// Declare theme variables
+var color bgHeader = na
+var color bgCell = na
+var color borderColor = na
+var color textLabel = na
+var color textValue = na
+
+// Apply theme
+if tableTheme == "Dark"
+    bgHeader := darkBgHeader
+    bgCell := darkBgCell
+    borderColor := darkBorder
+    textLabel := darkTextLabel
+    textValue := darkTextValue
+else
+    bgHeader := lightBgHeader
+    bgCell := lightBgCell
+    borderColor := lightBorder
+    textLabel := lightTextLabel
+    textValue := lightTextValue
+
+//==================================================
+// TIMEZONE OFFSET CALCULATION
+//==================================================
+offsetMillis = int(timezoneOffset * 60 * 60 * 1000)
+
+// Apply offset to current time for clock
+adjustedTime = timenow + offsetMillis
+
+// For background, use chart bar time with offset to determine correct trading day
+barAdjustedTime = time + offsetMillis
+barDayOfWeek = dayofweek(barAdjustedTime)
+
+//==================================================
+// ASSIGN COLOR BASED ON BAR'S DAY (for background)
+//==================================================
+color barDayColor = switch barDayOfWeek
+    dayofweek.monday    => colorMonday
+    dayofweek.tuesday   => colorTuesday
+    dayofweek.wednesday => colorWednesday
+    dayofweek.thursday  => colorThursday
+    dayofweek.friday    => colorFriday
+    dayofweek.saturday  => colorSaturday
+    dayofweek.sunday    => colorSunday
+
+// Apply opacity
+bgColor = color.new(barDayColor, 100 - bgOpacity)
+
+//==================================================
+// PAINT BACKGROUND
+//==================================================
+bgcolor(showBackground ? bgColor : na)
+
+//==================================================
+// DEBUG: Show day label on each bar
+//==================================================
+debugDayName = switch barDayOfWeek
+    dayofweek.monday    => "Mon"
+    dayofweek.tuesday   => "Tue"
+    dayofweek.wednesday => "Wed"
+    dayofweek.thursday  => "Thu"
+    dayofweek.friday    => "Fri"
+    dayofweek.saturday  => "Sat"
+    dayofweek.sunday    => "Sun"
+
+if showDayLabel
+    label.new(bar_index, high, debugDayName, style=label.style_label_down, color=barDayColor, textcolor=color.white, size=size.tiny)
+
+//==================================================
+// GET CURRENT TIME & DATE (without seconds) with offset
+//==================================================
+currentHour = hour(adjustedTime)
+currentMinute = minute(adjustedTime)
+
+// Format hour in 24-hour format with leading zero
+hourStr = str.tostring(currentHour)
+if currentHour < 10
+    hourStr := "0" + hourStr
+
+// Format minute with leading zero
+minuteStr = str.tostring(currentMinute)
+if currentMinute < 10
+    minuteStr := "0" + minuteStr
+
+timeString = hourStr + ":" + minuteStr
+
+// Get date components from adjusted time
+currentYear = year(adjustedTime)
+currentMonth = month(adjustedTime)
+currentDay = dayofmonth(adjustedTime)
+
+// Format month with leading zero
+monthStr = str.tostring(currentMonth)
+if currentMonth < 10
+    monthStr := "0" + monthStr
+
+// Format day with leading zero
+dayStr = str.tostring(currentDay)
+if currentDay < 10
+    dayStr := "0" + dayStr
+
+dateString = dayStr + "/" + monthStr + "/" + str.tostring(currentYear)
+
+//==================================================
+// GET CURRENT DAY NAME FOR TABLE (using adjusted time)
+//==================================================
+currentDayOfWeek = dayofweek(adjustedTime)
+currentDayName = switch currentDayOfWeek
+    dayofweek.monday    => "Mon"
+    dayofweek.tuesday   => "Tue"
+    dayofweek.wednesday => "Wed"
+    dayofweek.thursday  => "Thu"
+    dayofweek.friday    => "Fri"
+    dayofweek.saturday  => "Sat"
+    dayofweek.sunday    => "Sun"
+
+//==================================================
+// CREATE TABLE
+//==================================================
+// Determine table position
+tablePos = switch tablePosition
+    "Top Right" => position.top_right
+    "Top Left" => position.top_left
+    "Bottom Right" => position.bottom_right
+    => position.bottom_left
+
+var tbl = table.new(tablePos, 2, 3, border_width=1, border_color=borderColor, frame_color=borderColor, frame_width=1)
+
+if showClock
+    // Row 0: Time
+    table.cell(tbl, 0, 0, "TIME", bgcolor=bgHeader, text_color=textLabel, text_size=size.small, text_halign=text.align_center)
+    table.cell(tbl, 1, 0, timeString, bgcolor=bgCell, text_color=textValue, text_size=size.normal, text_halign=text.align_center)
+
+    // Row 1: Date
+    table.cell(tbl, 0, 1, "DATE", bgcolor=bgHeader, text_color=textLabel, text_size=size.small, text_halign=text.align_center)
+    table.cell(tbl, 1, 1, dateString, bgcolor=bgCell, text_color=textValue, text_size=size.normal, text_halign=text.align_center)
+
+    // Row 2: Day
+    table.cell(tbl, 0, 2, "DAY", bgcolor=bgHeader, text_color=textLabel, text_size=size.small, text_halign=text.align_center)
+    table.cell(tbl, 1, 2, currentDayName, bgcolor=bgCell, text_color=textValue, text_size=size.normal, text_halign=text.align_center)
