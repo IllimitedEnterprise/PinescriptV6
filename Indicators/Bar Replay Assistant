@@ -6,6 +6,7 @@ indicator("Bar Replay Assistant", overlay=true)
 //==================================================
 showBackground = input.bool(true, "Show Day Background Colors", group="Display")
 showClock = input.bool(true, "Show Clock & Date Table", group="Display")
+showMidnightLine = input.bool(true, "Show Next Midnight Line", group="Display")
 tablePosition = input.string("Top Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Display")
 tableTheme = input.string("Dark", "Table Theme", options=["Dark", "Light"], group="Display")
 timezoneOffset = input.float(2.0, "Timezone Offset (hours)", step=0.5, tooltip="Positive = ahead of UTC. Example: UTC+2 → +2", group="Display")
@@ -74,6 +75,53 @@ adjustedTime = timenow + offsetMillis
 // For background, use chart bar time with offset to determine correct trading day
 barAdjustedTime = time + offsetMillis
 barDayOfWeek = dayofweek(barAdjustedTime)
+
+//==================================================
+// TRACK CURRENT DAY'S HIGH AND LOW (with timezone offset)
+//==================================================
+// Get the current day number in user's timezone
+oneDay = 24 * 60 * 60 * 1000
+currentDayNum = math.floor(barAdjustedTime / oneDay)
+var int lastDayNum = na
+var float currentDayHigh = na
+var float currentDayLow = na
+
+// Detect new day in user's timezone
+if na(lastDayNum) or currentDayNum != lastDayNum
+    // New day started, reset high/low
+    currentDayHigh := high
+    currentDayLow := low
+    lastDayNum := currentDayNum
+else
+    // Update current day's high/low
+    currentDayHigh := math.max(currentDayHigh, high)
+    currentDayLow := math.min(currentDayLow, low)
+
+//==================================================
+// CALCULATE NEXT MIDNIGHT (in user's timezone)
+//==================================================
+// Get current timestamp in user's timezone
+currentTimestamp = timenow
+currentTimestampAdjusted = currentTimestamp + offsetMillis
+
+// Calculate milliseconds to next midnight
+midnightToday = math.floor(currentTimestampAdjusted / oneDay) * oneDay
+midnightTomorrow = midnightToday + oneDay
+nextMidnightExchange = midnightTomorrow - offsetMillis
+
+//==================================================
+// DRAW VERTICAL LINE AT NEXT MIDNIGHT
+//==================================================
+// Only draw if the line is in the future and we're on the last bar
+if showMidnightLine and barstate.islast and nextMidnightExchange > timenow and not na(currentDayHigh) and not na(currentDayLow)
+    // Delete previous midnight line if it exists
+    var line midnightLine = na
+    if not na(midnightLine)
+        line.delete(midnightLine)
+    
+    // Draw new line from current day's high to current day's low
+    midnightLine := line.new(x1=nextMidnightExchange, y1=currentDayHigh, x2=nextMidnightExchange, y2=currentDayLow, 
+                             xloc=xloc.bar_time, color=color.new(color.white, 50), width=1, style=line.style_solid)
 
 //==================================================
 // ASSIGN COLOR BASED ON BAR'S DAY (for background)
@@ -159,7 +207,7 @@ currentDayName = switch currentDayOfWeek
     dayofweek.sunday    => "Sun"
 
 //==================================================
-// CREATE TABLE
+// CREATE AND UPDATE TABLE
 //==================================================
 // Determine table position
 tablePos = switch tablePosition
@@ -168,8 +216,10 @@ tablePos = switch tablePosition
     "Bottom Right" => position.bottom_right
     => position.bottom_left
 
+// Create table only once
 var tbl = table.new(tablePos, 2, 3, border_width=1, border_color=borderColor, frame_color=borderColor, frame_width=1)
 
+// Update table cells on every bar (so time updates)
 if showClock
     // Row 0: Time
     table.cell(tbl, 0, 0, "TIME", bgcolor=bgHeader, text_color=textLabel, text_size=size.small, text_halign=text.align_center)
